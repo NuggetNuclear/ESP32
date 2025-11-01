@@ -1,9 +1,6 @@
-/*
- * Código de Sensor Ultrasónico con 5 Niveles de Alerta
- * - Trig en  PIN D14
- * - Echo en  PIN D13
- * - LED Integrado (D2) para indicar niveles de alerta
- */
+#include <esp_now.h>
+#include <WiFi.h>
+#include "private.h"
 
 // Pines
 const int TRIG_PIN = 14; // Trig (OUT)
@@ -17,27 +14,78 @@ const long TIMEOUT = 50000;
 
 // Tiempos del sensor y LED
 unsigned long previousSensorTime = 0;
-const long sensorInterval = 60;
+const long sensorInterval = 200;
 
 unsigned long previousBlinkTime = 0;
 int blinkStep = 0;
 int currentAlertLevel = 1;
+int lastSentAlertLevel = 0;
 
-void setup()
-{
+typedef struct struct_message {
+    float distance;
+    int   alert_level;
+} struct_message;
+
+
+struct_message ESP_msg;
+esp_now_peer_info_t peerInfo;
+
+void OnDataSent(const wifi_tx_info_t *tx_info, esp_now_send_status_t status) {
+  Serial.print("\r\nEstado del último envío: ");
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Éxito" : "Fallo");
+}
+
+void initEspNow() {
+
+    if (esp_now_init() != ESP_OK) {
+        Serial.println("Error al inicializar ESP-NOW");
+        return;
+    }
+
+    memcpy(peerInfo.peer_addr, camAddress, 6);
+    peerInfo.channel = 0;
+    peerInfo.encrypt = false;
+
+    if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+        Serial.println("Error al añadir el peer");
+        return;
+    }
+
+    esp_now_register_send_cb(OnDataSent);
+}
+
+void setup() {
+
     Serial.begin(115200);
-    Serial.println("Inicio del Sensor");
+    Serial.println("\nIniciando UltraSensor...");
 
+    // Configuración de pines
     pinMode(TRIG_PIN, OUTPUT);
     pinMode(ECHO_PIN, INPUT);
     pinMode(LED_PIN, OUTPUT);
 
+
+    digitalWrite(LED_PIN, HIGH);
+
+    WiFi.disconnect();
+    delay(100);
+    WiFi.mode(WIFI_STA);
+    delay(100);
+
+    initEspNow();
     digitalWrite(LED_PIN, LOW);
+
+    Serial.println("ESP-NOW Inicializado");
+
+    for(int i = 0; i <= 10; i++) {
+        digitalWrite(LED_PIN, HIGH);
+        delay(100);
+        digitalWrite(LED_PIN, LOW);
+        delay(100);
+    }
 }
 
-// Medicion de distancia y actualización del nivel de alerta
-void measureDistance()
-{
+void measureDistance() {
     digitalWrite(TRIG_PIN, LOW);
     delayMicroseconds(2);
     digitalWrite(TRIG_PIN, HIGH);
@@ -46,111 +94,90 @@ void measureDistance()
 
     duration = pulseIn(ECHO_PIN, HIGH, TIMEOUT);
 
-    if (duration == 0)
-    {
+    if (duration == 0) {
         distance_cm = 500.0;
         Serial.println("Error o fuera de rango.");
-    }
-    else
-    {
+    } else {
         distance_cm = (duration * 0.0343) / 2.0;
         Serial.print("Distancia: ");
-        Serial.print(distance_cm);
+        Serial.print((int)distance_cm);
         Serial.println(" cm");
     }
 
-    if (distance_cm <= 50.0)
-    {
-        // 0.2m - 0.5m
-        currentAlertLevel = 5;
-    }
-    else if (distance_cm <= 100.0)
-    {
-        // 0.5m - 1m
-        currentAlertLevel = 4;
-    }
-    else if (distance_cm <= 200.0)
-    {
-        // 1m - 2m
-        currentAlertLevel = 3;
-    }
-    else if (distance_cm <= 300.0)
-    {
-        // 2m - 3m
-        currentAlertLevel = 2;
-    }
-    else
-    {
-        // 3m +
-        currentAlertLevel = 1;
+    if (distance_cm <= 50.0) { currentAlertLevel = 5; }
+    else if (distance_cm <= 100.0) { currentAlertLevel = 4; }
+    else if (distance_cm <= 200.0) { currentAlertLevel = 3; }
+    else if (distance_cm <= 300.0) { currentAlertLevel = 2; }
+    else { currentAlertLevel = 1; }
+
+    if (currentAlertLevel != lastSentAlertLevel) {
+        Serial.print("¡Cambio de estado detectado! Enviando Nivel: ");
+        Serial.println(currentAlertLevel);
+
+        ESP_msg.distance = distance_cm;
+        ESP_msg.alert_level = currentAlertLevel;
+
+        esp_err_t result = esp_now_send(camAddress, (uint8_t *) &ESP_msg, sizeof(ESP_msg));
+        
+        if (result != ESP_OK) {
+          Serial.println("Error al poner mensaje en la cola de envío");
+        }
+
+        lastSentAlertLevel = currentAlertLevel;
     }
 }
 
-// Manejo del LED
-void updateLed(unsigned long currentTime)
-{
-
+void updateLed(unsigned long currentTime) {
     long timeDiff = currentTime - previousBlinkTime;
 
-    switch (currentAlertLevel)
-    {
-
+    switch (currentAlertLevel) {
     case 1:
         digitalWrite(LED_PIN, LOW);
         blinkStep = 0;
         break;
 
-    case 2: // Nivel 2: 2m - 3m (Parpadeo Lento - 1 Hz)
-        // Ciclo total: 1000ms
-        if (blinkStep == 0 && timeDiff >= 900)
-        {                                // 900ms OFF
-            digitalWrite(LED_PIN, HIGH); // Pulso ON
+    case 2: // 1 Hz
+        if (blinkStep == 0 && timeDiff >= 900) {
+            digitalWrite(LED_PIN, HIGH);
             previousBlinkTime = currentTime;
             blinkStep = 1;
         }
-        else if (blinkStep == 1 && timeDiff >= 100)
-        {                               // 100ms ON
-            digitalWrite(LED_PIN, LOW); // Pausa larga
+        else if (blinkStep == 1 && timeDiff >= 100) {
+            digitalWrite(LED_PIN, LOW); 
             previousBlinkTime = currentTime;
             blinkStep = 0;
         }
         break;
 
-    case 3: // Nivel 3: 1m - 2m (Parpadeo Medio - 2 Hz)
-        // Ciclo total: 500ms
-        if (blinkStep == 0 && timeDiff >= 400)
-        { // 400ms OFF
+    case 3: // 2 Hz
+        if (blinkStep == 0 && timeDiff >= 400) {
             digitalWrite(LED_PIN, HIGH);
             previousBlinkTime = currentTime;
             blinkStep = 1;
         }
-        else if (blinkStep == 1 && timeDiff >= 100)
-        { // 100ms ON
+        else if (blinkStep == 1 && timeDiff >= 100) {
             digitalWrite(LED_PIN, LOW);
             previousBlinkTime = currentTime;
             blinkStep = 0;
         }
         break;
 
-    case 4: // Nivel 4: 0.5m - 1m (Parpadeo Muy Rápido - 4 Hz)
-        // Ciclo total: 250ms
-        if (blinkStep == 0 && timeDiff >= 200)
-        { // 200ms OFF
+    case 4: // 4 Hz
+        if (blinkStep == 0 && timeDiff >= 200) {
             digitalWrite(LED_PIN, HIGH);
             previousBlinkTime = currentTime;
             blinkStep = 1;
         }
-        else if (blinkStep == 1 && timeDiff >= 50)
-        { // 50ms ON (pulso corto)
+        else if (blinkStep == 1 && timeDiff >= 50) {
             digitalWrite(LED_PIN, LOW);
             previousBlinkTime = currentTime;
             blinkStep = 0;
         }
         break;
 
-    case 5: // Nivel 5: 0.2m - 0.5m (Encendido fijo)
+    case 5: // Fijo Encendido
         digitalWrite(LED_PIN, HIGH);
-        blinkStep = 0; // Resetear el parpadeo
+        blinkStep = 0;
         break;
     }
 }
@@ -159,10 +186,10 @@ void loop()
 {
     unsigned long currentTime = millis();
 
-    if (currentTime - previousSensorTime >= sensorInterval)
-    {
+    if (currentTime - previousSensorTime >= sensorInterval) {
         previousSensorTime = currentTime;
         measureDistance();
     }
+
     updateLed(currentTime);
 }
