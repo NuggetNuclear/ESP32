@@ -11,13 +11,13 @@ const int ECHO_PIN = 13; // Echo (IN)
 const int LED_PIN = 2;   // Pin del LED integrado
 
 // Variables del sensor
-long duration;
+unsigned long duration;
 float distance_cm = 600.0;
-const long TIMEOUT = 50000;
+const unsigned long TIMEOUT = 50000;
 
 // Tiempos del sensor y LED
 unsigned long previousSensorTime = 0;
-const long sensorInterval = 60;
+const unsigned long sensorInterval = 60;
 
 unsigned long previousBlinkTime = 0;
 int blinkStep = 0;
@@ -90,7 +90,7 @@ void measureDistance()
 void updateLed(unsigned long currentTime)
 {
 
-    long timeDiff = currentTime - previousBlinkTime;
+    unsigned long timeDiff = currentTime - previousBlinkTime;
 
     switch (currentAlertLevel)
     {
