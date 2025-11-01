@@ -3,6 +3,8 @@
 void setup(){
   Serial.begin(115200);
   Serial.println();
+
+  WiFi.mode(WIFI_STA); 
   Serial.print("Dirección MAC de este ESP32 (Receptor): ");
   Serial.println(WiFi.macAddress());
 }
